@@ -1,6 +1,6 @@
 /**************************************************************************
 
-Copyright (c) 2004-17 Simon Peter
+Copyright (c) 2004-18 Simon Peter
 Portions Copyright (c) 2010 RazZziel
 
 All Rights Reserved.
@@ -31,12 +31,19 @@ THE SOFTWARE.
 #include <libgen.h>
 #include <dirent.h>
 #include <string.h>
+#include <errno.h>
 
 #define die(...)                                    \
     do {                                            \
         fprintf(stderr, "Error: " __VA_ARGS__);     \
         exit(1);                                    \
     } while(0);
+#define SET_NEW_ENV(str,len,fmt,...)                \
+    format = fmt;                                   \
+    length = strlen(format) + (len);                \
+    char *str = calloc(length, sizeof(char));     \
+    snprintf(str, length, format, __VA_ARGS__);   \
+    putenv(str);
 #define MAX(a,b)    (a > b ? a : b)
 #define bool int
 #define false 0
@@ -66,8 +73,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* Extract executable from .desktop file */
-    char *desktop_file = malloc(LINE_SIZE);
-    snprintf(desktop_file, LINE_SIZE-1, "%s/%s", appdir, namelist[0]->d_name);
+    char *desktop_file = calloc(LINE_SIZE, sizeof(char));
+    snprintf(desktop_file, LINE_SIZE, "%s/%s", appdir, namelist[0]->d_name);
     FILE *f     = fopen(desktop_file, "r");
     char *line  = malloc(LINE_SIZE);
     char *exe   = line+5;
@@ -146,53 +153,64 @@ int main(int argc, char *argv[]) {
     outargptrs[outargindex] = '\0';     // trailing null argument required by execvp()
 
     // change directory
-    char usr_in_appdir[1024];
-    sprintf(usr_in_appdir, "%s/usr", appdir);
+    size_t appdir_s = strlen(appdir);
+    char *usr_in_appdir = malloc(appdir_s + 5);
+    snprintf(usr_in_appdir, appdir_s + 5, "%s/usr", appdir);
     ret = chdir(usr_in_appdir);
     if (ret != 0)
         die("Could not cd into %s\n", usr_in_appdir);
 
     // set environment variables
     char *old_env;
-    const LENGTH = 2047;
-    char new_env[8][LENGTH+1];
+    size_t length;
+    const char *format;
 
     /* https://docs.python.org/2/using/cmdline.html#envvar-PYTHONHOME */
-    snprintf(new_env[0], LENGTH, "PYTHONHOME=%s/usr/", appdir);
+    SET_NEW_ENV(new_pythonhome, appdir_s, "PYTHONHOME=%s/usr/", appdir);
 
-    int a,b;
     old_env = getenv("PATH") ?: "";
-    snprintf(new_env[1], LENGTH, "PATH=%s/usr/bin/:%s/usr/sbin/:%s/usr/games/:%s/bin/:%s/sbin/:%s", appdir, appdir, appdir, appdir, appdir, old_env);
+    SET_NEW_ENV(new_path, appdir_s*5 + strlen(old_env), "PATH=%s/usr/bin/:%s/usr/sbin/:%s/usr/games/:%s/bin/:%s/sbin/:%s", appdir, appdir, appdir, appdir, appdir, old_env);
 
     old_env = getenv("LD_LIBRARY_PATH") ?: "";
-    snprintf(new_env[2], LENGTH, "LD_LIBRARY_PATH=%s/usr/lib/:%s/usr/lib/i386-linux-gnu/:%s/usr/lib/x86_64-linux-gnu/:%s/usr/lib32/:%s/usr/lib64/:%s/lib/:%s/lib/i386-linux-gnu/:%s/lib/x86_64-linux-gnu/:%s/lib32/:%s/lib64/:%s", appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, old_env);
+    SET_NEW_ENV(new_ld_library_path, appdir_s*10 + strlen(old_env), "LD_LIBRARY_PATH=%s/usr/lib/:%s/usr/lib/i386-linux-gnu/:%s/usr/lib/x86_64-linux-gnu/:%s/usr/lib32/:%s/usr/lib64/:%s/lib/:%s/lib/i386-linux-gnu/:%s/lib/x86_64-linux-gnu/:%s/lib32/:%s/lib64/:%s", appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, old_env);
 
     old_env = getenv("PYTHONPATH") ?: "";
-    snprintf(new_env[3], LENGTH, "PYTHONPATH=%s/usr/share/pyshared/:%s", appdir, old_env);
+    SET_NEW_ENV(new_pythonpath, appdir_s + strlen(old_env), "PYTHONPATH=%s/usr/share/pyshared/:%s", appdir, old_env);
 
-    old_env = getenv("XDG_DATA_DIRS") ?: "";
-    snprintf(new_env[4], LENGTH, "XDG_DATA_DIRS=%s/usr/share/:%s", appdir, old_env);
+    old_env = getenv("XDG_DATA_DIRS") ?: "/usr/local/share/:/usr/share/";
+    SET_NEW_ENV(new_xdg_data_dirs, appdir_s + strlen(old_env), "XDG_DATA_DIRS=%s/usr/share/:%s", appdir, old_env);
 
     old_env = getenv("PERLLIB") ?: "";
-    snprintf(new_env[5], LENGTH, "PERLLIB=%s/usr/share/perl5/:%s/usr/lib/perl5/:%s", appdir, appdir, old_env);
+    SET_NEW_ENV(new_perllib, appdir_s*2 + strlen(old_env), "PERLLIB=%s/usr/share/perl5/:%s/usr/lib/perl5/:%s", appdir, appdir, old_env);
 
     /* http://askubuntu.com/questions/251712/how-can-i-install-a-gsettings-schema-without-root-privileges */
     old_env = getenv("GSETTINGS_SCHEMA_DIR") ?: "";
-    snprintf(new_env[6], LENGTH, "GSETTINGS_SCHEMA_DIR=%s/usr/share/glib-2.0/schemas/:%s", appdir, old_env);
+    SET_NEW_ENV(new_gsettings_schema_dir, appdir_s + strlen(old_env), "GSETTINGS_SCHEMA_DIR=%s/usr/share/glib-2.0/schemas/:%s", appdir, old_env);
 
     old_env = getenv("QT_PLUGIN_PATH") ?: "";
-    snprintf(new_env[7], LENGTH, "QT_PLUGIN_PATH=%s/usr/lib/qt4/plugins/:%s/usr/lib/i386-linux-gnu/qt4/plugins/:%s/usr/lib/x86_64-linux-gnu/qt4/plugins/:%s/usr/lib32/qt4/plugins/:%s/usr/lib64/qt4/plugins/:%s/usr/lib/qt5/plugins/:%s/usr/lib/i386-linux-gnu/qt5/plugins/:%s/usr/lib/x86_64-linux-gnu/qt5/plugins/:%s/usr/lib32/qt5/plugins/:%s/usr/lib64/qt5/plugins/:%s", appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, old_env);
+    SET_NEW_ENV(new_qt_plugin_path, appdir_s*10 + strlen(old_env), "QT_PLUGIN_PATH=%s/usr/lib/qt4/plugins/:%s/usr/lib/i386-linux-gnu/qt4/plugins/:%s/usr/lib/x86_64-linux-gnu/qt4/plugins/:%s/usr/lib32/qt4/plugins/:%s/usr/lib64/qt4/plugins/:%s/usr/lib/qt5/plugins/:%s/usr/lib/i386-linux-gnu/qt5/plugins/:%s/usr/lib/x86_64-linux-gnu/qt5/plugins/:%s/usr/lib32/qt5/plugins/:%s/usr/lib64/qt5/plugins/:%s", appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, appdir, old_env);
 
-    for (n = 0; n < 8; n++)
-        putenv(new_env[n]);
+    /* Otherwise may get errors because Python cannot write __pycache__ bytecode cache */
+    putenv("PYTHONDONTWRITEBYTECODE=1");
 
     /* Run */
     ret = execvp(exe, outargptrs);
+    
+    int error = errno;
 
     if (ret == -1)
-        die("Error executing '%s'; return code: %d\n", exe, ret);
+        die("Error executing '%s': %s\n", exe, strerror(error));
 
     free(line);
     free(desktop_file);
+    free(usr_in_appdir);
+    free(new_pythonhome);
+    free(new_path);
+    free(new_ld_library_path);
+    free(new_pythonpath);
+    free(new_xdg_data_dirs);
+    free(new_perllib);
+    free(new_gsettings_schema_dir);
+    free(new_qt_plugin_path);
     return 0;
 }

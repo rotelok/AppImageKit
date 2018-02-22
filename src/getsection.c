@@ -1,29 +1,33 @@
-#include <elf.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <string.h>
 #include <unistd.h>
+#include "light_elf.h"
 
 /* Return the offset, and the length of an ELF section with a given name in a given ELF file */
-int get_elf_section_offset_and_lenghth(char* fname, char* section_name, unsigned long *offset, unsigned long *length)
+int get_elf_section_offset_and_length(const char* fname, const char* section_name, unsigned long *offset, unsigned long *length)
 {
     uint8_t *data;   
     int i;  
     int fd = open(fname, O_RDONLY);
     data = mmap(NULL, lseek(fd, 0, SEEK_END), PROT_READ, MAP_SHARED, fd, 0);
 
-#ifdef __i386__
+// optionally add more architectures for 32-bit builds so that it doesn't fall back to Elf64_*
+// see e.g. https://sourceforge.net/p/predef/wiki/Architectures/ for more predefined macro names
+#if __SIZEOF_POINTER__ == 4
     Elf32_Ehdr *elf;
     Elf32_Shdr *shdr;
     elf = (Elf32_Ehdr *) data;
     shdr = (Elf32_Shdr *) (data + elf->e_shoff);
-#else // Default to x86_64
+#elif __SIZEOF_POINTER__ == 8
     Elf64_Ehdr *elf;
     Elf64_Shdr *shdr;
     elf = (Elf64_Ehdr *) data;
     shdr = (Elf64_Shdr *) (data + elf->e_shoff);
+#else
+    #error Platforms other than 32-bit/64-bit are currently not supported!
 #endif
 
     char *strTab = (char *)(data + shdr[elf->e_shstrndx].sh_offset);
@@ -51,14 +55,19 @@ void print_hex(char* fname, unsigned long offset, unsigned long length){
 
 void print_binary(char* fname, unsigned long offset, unsigned long length){
     uint8_t *data;   
-    unsigned long k;
+    unsigned long k, endpos;
+
     int fd = open(fname, O_RDONLY);
     data = mmap(NULL, lseek(fd, 0, SEEK_END), PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
-    for (k = offset; k < offset + length; k++) {
+
+    endpos = offset + length;
+
+    for (k = offset; k < endpos && data[k] != '\0'; k++) {
         printf("%c", data[k]);
-        }   
-        printf("\n");
+    }
+
+    printf("\n");
 }
 
 /*

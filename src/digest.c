@@ -26,7 +26,10 @@ int sha256_file(char *path, char outputBuffer[65], int skip_offset, int skip_len
     const int bufSize = 1024*1024;
     byte *buffer = malloc(bufSize);
     int bytesRead = 0;
-    if(!buffer) return ENOMEM;
+    if(!buffer) {
+        fclose(file);
+        return ENOMEM;
+    }
 
     int totalBytesRead = 0;
     if(skip_offset <= bufSize){
@@ -88,6 +91,9 @@ int sha256_file(char *path, char outputBuffer[65], int skip_offset, int skip_len
         sprintf(outputBuffer + (i * 2), "%02x", hash[i]);
     }
     outputBuffer[64] = 0;
+
+    fclose(file);
+    free(buffer);
     
     return 0;
 }
@@ -116,7 +122,7 @@ int main(int argc,char **argv)
     }
 
     if(argc < 4){
-        get_elf_section_offset_and_lenghth(filename, ".sha256_sig", &skip_offset, &skip_length);
+        get_elf_section_offset_and_length(filename, ".sha256_sig", &skip_offset, &skip_length);
         if(skip_length > 0)
             fprintf(stderr, "Skipping ELF section %s with offset %lu, length %lu\n", segment_name, skip_offset, skip_length);
     } else if(argc == 4) {

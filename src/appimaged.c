@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright (c) 2004-17 Simon Peter
+ * Copyright (c) 2004-18 Simon Peter
  *
  * All Rights Reserved.
  *
@@ -55,12 +55,17 @@
 
 #include <pthread.h>
 
+#ifndef RELEASE_NAME
+    #define RELEASE_NAME "continuous build"
+#endif
+
 extern int notify(char *title, char *body, int timeout);
 
 static gboolean verbose = FALSE;
-static gboolean version = FALSE;
+static gboolean showVersionOnly = FALSE;
 static gboolean install = FALSE;
 static gboolean uninstall = FALSE;
+static gboolean no_install = FALSE;
 gchar **remaining_args = NULL;
 
 static GOptionEntry entries[] =
@@ -68,7 +73,8 @@ static GOptionEntry entries[] =
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL },
     { "install", 'i', 0, G_OPTION_ARG_NONE, &install, "Install this appimaged instance to $HOME", NULL },
     { "uninstall", 'u', 0, G_OPTION_ARG_NONE, &uninstall, "Uninstall an appimaged instance from $HOME", NULL },
-    { "version", 0, 0, G_OPTION_ARG_NONE, &version, "Show version number", NULL },
+    { "no-install", 'n', 0, G_OPTION_ARG_NONE, &no_install, "Force run without installation", NULL },
+    { "version", 0, 0, G_OPTION_ARG_NONE, &showVersionOnly, "Show version number", NULL },
     { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_FILENAME_ARRAY, &remaining_args, NULL },
     { NULL }
 };
@@ -152,12 +158,13 @@ void initially_register(const char *name, int level)
                     pthread_join(some_thread, NULL);
                 }
             }
+            g_free(absolute_path);
         }
     } while ((entry = readdir(dir)) != NULL);
     closedir(dir);
 }
 
-void add_dir_to_watch(char *directory)
+void add_dir_to_watch(const char *directory)
 {
     if (g_file_test (directory, G_FILE_TEST_IS_DIR)){
         if(!inotifytools_watch_recursively(directory, WR_EVENTS) ) {
@@ -200,6 +207,8 @@ void handle_event(struct inotify_event *event)
         }
     }
 
+    g_free(absolute_path);
+
     /* Too many FS events were received, some event notifications were potentially lost */
     if (event->mask & IN_Q_OVERFLOW){
         printf ("Warning: AN OVERFLOW EVENT OCCURRED\n");
@@ -225,12 +234,17 @@ int main(int argc, char ** argv) {
         exit (1);
     }
 
-    if(version){
-        fprintf(stderr,"Version: %s\n", VERSION_NUMBER);
-        exit(0);
-    }
+    // always show version, but exit immediately if only the version number was requested
+    fprintf(
+        stderr,
+        "appimaged, %s (commit %s), build %s built on %s\n",
+        RELEASE_NAME, GIT_COMMIT, BUILD_NUMBER, BUILD_DATE
+    );
 
-    if ( !inotifytools_initialize()){
+    if(showVersionOnly)
+        exit(0);
+
+    if (!inotifytools_initialize()) {
         fprintf(stderr, "inotifytools_initialize error\n");
         exit(1);
     }
@@ -293,7 +307,7 @@ int main(int argc, char ** argv) {
 
     /* When we run from inside an AppImage, then we check if we are installed
      * in a per-user location and if not, we install ourselves there */
-    if(((appimage_location != NULL)) && ((own_desktop_file_location != NULL))){
+    if(!no_install && (appimage_location != NULL && own_desktop_file_location != NULL)) {
         if ( (! g_file_test ("/usr/bin/appimaged", G_FILE_TEST_EXISTS)) && ((! g_file_test (global_autostart_file, G_FILE_TEST_EXISTS)) || (! g_file_test (destination, G_FILE_TEST_EXISTS))) && (! g_file_test (global_systemd_file, G_FILE_TEST_EXISTS)) && (! g_file_test (installed_appimaged_location, G_FILE_TEST_EXISTS)) && (g_file_test (own_desktop_file_location, G_FILE_TEST_IS_REGULAR))){
             char *title;
             char *body;
@@ -305,12 +319,17 @@ int main(int argc, char ** argv) {
     }
 
     add_dir_to_watch(user_bin_dir);
-    add_dir_to_watch(g_build_filename(g_get_home_dir(), "/Downloads", NULL));
+    add_dir_to_watch(g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD));
     add_dir_to_watch(g_build_filename(g_get_home_dir(), "/bin", NULL));
+    add_dir_to_watch(g_build_filename(g_get_home_dir(), "/.bin", NULL));
+    add_dir_to_watch(g_build_filename(g_get_home_dir(), "/Applications", NULL));
     add_dir_to_watch(g_build_filename("/Applications", NULL));
+    // Perhaps we should determine the following dynamically using something like
+    // mount | grep -i iso | head -n 1 | cut -d ' ' -f 3
     add_dir_to_watch(g_build_filename("/isodevice/Applications", NULL)); // Ubuntu Live media
     add_dir_to_watch(g_build_filename("/isofrom/Applications", NULL)); // openSUSE Live media
     add_dir_to_watch(g_build_filename("/run/archiso/img_dev/Applications", NULL)); // Antergos Live media
+    add_dir_to_watch(g_build_filename("/lib/live/mount/findiso/Applications", NULL)); // Manjaro Live media
     add_dir_to_watch(g_build_filename("/opt", NULL));
     add_dir_to_watch(g_build_filename("/usr/local/bin", NULL));
 

@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright (c) 2004-17 Simon Peter
+ * Copyright (c) 2004-18 Simon Peter
  * Portions Copyright (c) 2007 Alexander Larsson
  * 
  * All Rights Reserved.
@@ -66,6 +66,15 @@ static long unsigned int fs_offset; // The offset at which a filesystem image is
 static void die(const char *msg) {
     fprintf(stderr, "%s\n", msg);
     exit(1);
+}
+
+/* Check whether directory is writable */
+bool is_writable_directory(char* str) {
+    if(access(str, W_OK) == 0) {
+        return true;
+    } else {
+        return false;   
+    }
 }
 
 bool startsWith(const char *pre, const char *str)
@@ -153,7 +162,7 @@ char* getArg(int argc, char *argv[],char chr)
         return NULL;
 }
 
-/* mkdir -p implemented in C, needed for https://github.com/probonopd/AppImageKit/issues/333
+/* mkdir -p implemented in C, needed for https://github.com/AppImage/AppImageKit/issues/333
  * https://gist.github.com/JonathonReinhart/8c0d90191c38af2dcadb102c4e202950 */
 int
 mkdir_p(const char *path)
@@ -195,10 +204,73 @@ mkdir_p(const char *path)
     return 0;
 }
 
+void
+print_help(const char *appimage_path)
+{
+    // TODO: "--appimage-list                 List content from embedded filesystem image\n"
+    printf(
+        "AppImage options:\n\n"
+        "  --appimage-extract              Extract content from embedded filesystem image\n"
+        "  --appimage-help                 Print this help\n"
+        "  --appimage-mount                Mount embedded filesystem image and print\n"
+        "                                  mount point and wait for kill with Ctrl-C\n"
+        "  --appimage-offset               Print byte offset to start of embedded\n"
+        "                                  filesystem image\n"
+        "  --appimage-portable-home        Create a portable home folder to use as $HOME\n"
+        "  --appimage-portable-config      Create a portable config folder to use as\n"
+        "                                  $XDG_CONFIG_HOME\n"
+        "  --appimage-signature            Print digital signature embedded in AppImage\n"
+        "  --appimage-updateinfo[rmation]  Print update info embedded in AppImage\n"
+        "  --appimage-version              Print version of AppImageKit\n"
+        "\n"
+        "Portable home:\n"
+        "\n"
+        "  If you would like the application contained inside this AppImage to store its\n"
+        "  data alongside this AppImage rather than in your home directory, then you can\n"
+        "  place a directory named\n"
+        "\n"
+        "  %s.home\n"
+        "\n"
+        "  Or you can invoke this AppImage with the --appimage-portable-home option,\n"
+        "  which will create this directory for you. As long as the directory exists\n"
+        "  and is neither moved nor renamed, the application contained inside this\n"
+        "  AppImage to store its data in this directory rather than in your home\n"
+        "  directory\n"
+    , appimage_path);
+}
+
+void
+portable_option(const char *arg, const char *appimage_path, const char *name)
+{
+    char option[32];
+    sprintf(option, "appimage-portable-%s", name);
+
+    if (arg && strcmp(arg, option)==0) {
+        char portable_dir[PATH_MAX];
+        char fullpath[PATH_MAX];
+
+        ssize_t length = readlink(appimage_path, fullpath, sizeof(fullpath));
+        if (length < 0) {
+            printf("Error getting realpath for %s\n", appimage_path);
+            exit(EXIT_FAILURE);
+        }
+        fullpath[length] = '\0';
+
+        sprintf(portable_dir, "%s.%s", fullpath, name);
+        if (!mkdir(portable_dir, S_IRWXU))
+            printf("Portable %s directory created at %s\n", name, portable_dir);
+        else
+            printf("Error creating portable %s directory at %s: %s\n", name, portable_dir, strerror(errno));
+
+        exit(0);
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
     char appimage_path[PATH_MAX];
+    char argv0_path[PATH_MAX];
     char * arg;
     
     /* We might want to operate on a target appimage rather than this file itself,
@@ -211,13 +283,31 @@ main (int argc, char *argv[])
         sprintf(appimage_path, "/proc/self/exe");
     } else {
         sprintf(appimage_path, "%s", getenv("TARGET_APPIMAGE"));
-        printf("Using TARGET_APPIMAGE %s\n", appimage_path);
+        fprintf(stderr, "Using TARGET_APPIMAGE %s\n", appimage_path);
     }
-    
+	
+    sprintf(argv0_path, argv[0]);
+
     fs_offset = get_elf_size(appimage_path);
     
-    /* Just print the offset and then exit */
     arg=getArg(argc,argv,'-');
+
+    /* Print the help and then exit */
+    if(arg && strcmp(arg,"appimage-help")==0) {
+        char fullpath[PATH_MAX];
+
+        ssize_t length = readlink(appimage_path, fullpath, sizeof(fullpath));
+        if (length < 0) {
+            printf("Error getting realpath for %s\n", appimage_path);
+            exit(EXIT_FAILURE);
+        }
+        fullpath[length] = '\0';
+
+        print_help(fullpath);
+        exit(0);
+    }
+
+    /* Just print the offset and then exit */
     if(arg && strcmp(arg,"appimage-offset")==0) {
         printf("%lu\n", fs_offset);
         exit(0);
@@ -323,14 +413,14 @@ main (int argc, char *argv[])
     }
     
     if(arg && strcmp(arg,"appimage-version")==0) {
-        fprintf(stderr,"Version: %s\n", VERSION_NUMBER);
+        fprintf(stderr,"Version: %s\n", GIT_COMMIT);
         exit(0);
     }
     
-    if(arg && strcmp(arg,"appimage-updateinformation")==0) {
+    if(arg && (strcmp(arg,"appimage-updateinformation")==0 || strcmp(arg,"appimage-updateinfo")==0)) {
         unsigned long offset = 0;
         unsigned long length = 0;
-        get_elf_section_offset_and_lenghth(appimage_path, ".upd_info", &offset, &length);
+        get_elf_section_offset_and_length(appimage_path, ".upd_info", &offset, &length);
         // printf("offset: %lu\n", offset);
         // printf("length: %lu\n", length);
         // print_hex(appimage_path, offset, length);
@@ -341,7 +431,7 @@ main (int argc, char *argv[])
     if(arg && strcmp(arg,"appimage-signature")==0) {
         unsigned long offset = 0;
         unsigned long length = 0;
-        get_elf_section_offset_and_lenghth(appimage_path, ".sha256_sig", &offset, &length);
+        get_elf_section_offset_and_length(appimage_path, ".sha256_sig", &offset, &length);
         // printf("offset: %lu\n", offset);
         // printf("length: %lu\n", length);
         // print_hex(appimage_path, offset, length);
@@ -349,10 +439,30 @@ main (int argc, char *argv[])
         exit(0);
     }
 
+    portable_option(arg, appimage_path, "home");
+    portable_option(arg, appimage_path, "config");
+
+    // If there is an argument starting with appimage- (but not appimage-mount which is handled further down)
+    // then stop here and print an error message
+    if((arg && strncmp(arg, "appimage-", 8) == 0) && (arg && strcmp(arg,"appimage-mount")!=0)) {
+        fprintf(stderr,"--%s is not yet implemented in version %s\n", arg, GIT_COMMIT);
+        exit(1);
+    }
+
     LOAD_LIBRARY; /* exit if libfuse is missing */
 
     int dir_fd, res;
-    char mount_dir[] = "/tmp/.mount_XXXXXX";  /* create mountpoint */
+
+    char mount_dir[64];
+    int namelen = strlen(basename(argv[0]));
+    if(namelen>6){
+        namelen=6;
+    }
+    strncpy(mount_dir, "/tmp/.mount_", 12);
+    strncpy(mount_dir+12, basename(argv[0]), namelen);
+    strncpy(mount_dir+12+namelen, "XXXXXX", 6);
+    mount_dir[12+namelen+6] = 0; // null terminate destination
+    
     char filename[100]; /* enough for mount_dir + "/AppRun" */
     pid_t pid;
     char **real_argv;
@@ -398,7 +508,7 @@ main (int argc, char *argv[])
             title = "Cannot mount AppImage, please check your FUSE setup.";
             body = "You might still be able to extract the contents of this AppImage \n"
             "if you run it with the --appimage-extract option. \n"
-            "See https://github.com/probonopd/AppImageKit/wiki/FUSE \n"
+            "See https://github.com/AppImage/AppImageKit/wiki/FUSE \n"
             "for more information";
 	    notify(title, body, 0); // 3 seconds timeout
         };
@@ -454,7 +564,27 @@ main (int argc, char *argv[])
                 
         /* Setting some environment variables that the app "inside" might use */
         setenv( "APPIMAGE", fullpath, 1 );
+	setenv( "ARGV0", argv0_path, 1 );
         setenv( "APPDIR", mount_dir, 1 );
+
+        char portable_home_dir[PATH_MAX];
+        char portable_config_dir[PATH_MAX];
+        
+        /* If there is a directory with the same name as the AppImage plus ".home", then export $HOME */
+        strcpy (portable_home_dir, fullpath);
+        strcat (portable_home_dir, ".home");        
+        if(is_writable_directory(portable_home_dir)){
+            printf("Setting $HOME to %s\n", portable_home_dir);
+            setenv("HOME",portable_home_dir,1); 
+        }
+
+        /* If there is a directory with the same name as the AppImage plus ".config", then export $XDG_CONFIG_HOME */
+        strcpy (portable_config_dir, fullpath);
+        strcat (portable_config_dir, ".config");        
+        if(is_writable_directory(portable_config_dir)){
+            printf("Setting $XDG_CONFIG_HOME to %s\n", portable_config_dir);
+            setenv("XDG_CONFIG_HOME",portable_config_dir,1); 
+        }
         
         /* Original working directory */
         char cwd[1024];
